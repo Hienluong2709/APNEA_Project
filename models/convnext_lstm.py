@@ -1,38 +1,49 @@
 import torch
 import torch.nn as nn
-from torchvision.models.convnext import convnext_tiny
+from torchvision.models import convnext_tiny
 
 class ConvNeXtLSTM(nn.Module):
-    """
-    Mô hình theo bài báo 2025:
-    - ConvNeXt-Tiny backbone trích xuất đặc trưng không gian
-    - LSTM 1 layer để nâm bắt mối quan hệ chuỗi
-    - FC phân loại apnea / non-apnea
-    """
-    def __init__(self, lstm_hidden=128, num_classes=2):
-        super().__init__()
+    def __init__(self, num_classes=2, hidden_dim=256, lstm_layers=1):
+        super(ConvNeXtLSTM, self).__init__()
 
-        # ConvNeXt backbone pretrained
-        self.backbone = convnext_tiny(weights="IMAGENET1K_V1")
-        self.backbone.classifier = nn.Identity()  # bỏ lớp FC cuối
+        # ConvNeXt backbone (không dùng classifier gốc)
+        self.backbone = convnext_tiny(weights=None)  # nếu muốn tải pretrain: weights='DEFAULT'
+        self.backbone.classifier = nn.Identity()     # bỏ phần phân loại gốc
+        self.backbone.avgpool = nn.AdaptiveAvgPool2d((1, 1))  # đảm bảo đầu ra luôn (B, C, 1, 1)
 
-        # LSTM sau ConvNeXt (768 đầu ra)
-        self.lstm = nn.LSTM(input_size=768, hidden_size=lstm_hidden,
-                            num_layers=1, batch_first=True)
+        # LSTM
+        self.lstm = nn.LSTM(
+            input_size=768,  # output của convnext_tiny
+            hidden_size=hidden_dim,
+            num_layers=lstm_layers,
+            batch_first=True
+        )
 
-        # Fully connected cho classification
-        self.fc = nn.Linear(lstm_hidden, num_classes)
+        # Classifier cuối
+        self.fc = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, x):
-        # x: (B, 1, 64, 684) - Mel-spectrum
+        # x shape ban đầu: (B, 1, 64, 684) — 1 channel, 64 mel bands, 684 time frames
 
-        x = x.repeat(1, 3, 1, 1)  # (B, 3, 64, 684)
-        feat = self.backbone(x)  # (B, 768)
+        if x.dim() == 5:
+            x = x.squeeze(1)  # (B, 1, 64, 684) → (B, 64, 684)
 
-        # Bổ sung chiều thời gian giả (vì LSTM yêu cầu chuỗi)
-        feat = feat.unsqueeze(1)  # (B, 1, 768)
+        # Đảm bảo x có shape (B, 1, 64, 684)
+        if x.dim() == 3:
+            x = x.unsqueeze(1)
 
-        lstm_out, _ = self.lstm(feat)  # (B, 1, hidden)
-        out = self.fc(lstm_out[:, -1])  # lấy đầu ra bước cuối
+        # Lặp lại channel để thành ảnh 3 kênh (B, 3, 64, 684)
+        x = x.repeat(1, 3, 1, 1)
+
+        # Trích đặc trưng từ ConvNeXt → (B, 768, 1, 1)
+        feat = self.backbone(x)           # (B, 768, 1, 1)
+        feat = feat.view(feat.size(0), -1)  # (B, 768)
+
+        # Đưa qua LSTM — phải thêm chiều seq_len = 1 → (B, 1, 768)
+        feat = feat.unsqueeze(1)          # (B, 1, 768)
+        lstm_out, _ = self.lstm(feat)     # (B, 1, hidden_dim)
+
+        # Lấy output ở thời điểm cuối cùng (vì seq_len = 1 nên là [:, -1])
+        out = self.fc(lstm_out[:, -1])    # (B, num_classes)
 
         return out
