@@ -7,43 +7,33 @@ class ConvNeXtLSTM(nn.Module):
         super(ConvNeXtLSTM, self).__init__()
 
         # ConvNeXt backbone (không dùng classifier gốc)
-        self.backbone = convnext_tiny(weights=None)  # nếu muốn tải pretrain: weights='DEFAULT'
-        self.backbone.classifier = nn.Identity()     # bỏ phần phân loại gốc
-        self.backbone.avgpool = nn.AdaptiveAvgPool2d((1, 1))  # đảm bảo đầu ra luôn (B, C, 1, 1)
+        self.backbone = convnext_tiny(weights=None)  # để nhanh, bỏ pretrain
+        self.backbone.classifier = nn.Identity()     # bỏ FC cuối
+        self.backbone.avgpool = nn.AdaptiveAvgPool2d((1, 1))
 
-        # LSTM
+        # LSTM (phải dùng cho chuỗi block)
         self.lstm = nn.LSTM(
-            input_size=768,  # output của convnext_tiny
+            input_size=768,
             hidden_size=hidden_dim,
             num_layers=lstm_layers,
             batch_first=True
         )
 
-        # Classifier cuối
         self.fc = nn.Linear(hidden_dim, num_classes)
 
     def forward(self, x):
-        # x shape ban đầu: (B, 1, 64, 684) — 1 channel, 64 mel bands, 684 time frames
+        # x: (B, seq_len, 1, 64, 684)
+        B, T, C, H, W = x.shape
+        x = x.view(B * T, C, H, W)
 
-        if x.dim() == 5:
-            x = x.squeeze(1)  # (B, 1, 64, 684) → (B, 64, 684)
+        # Lặp 3 channel
+        x = x.repeat(1, 3, 1, 1)  # (B*T, 3, 64, 684)
 
-        # Đảm bảo x có shape (B, 1, 64, 684)
-        if x.dim() == 3:
-            x = x.unsqueeze(1)
+        # ConvNeXt
+        feat = self.backbone(x)              # (B*T, 768, 1, 1)
+        feat = feat.view(B, T, -1)           # (B, T, 768)
 
-        # Lặp lại channel để thành ảnh 3 kênh (B, 3, 64, 684)
-        x = x.repeat(1, 3, 1, 1)
-
-        # Trích đặc trưng từ ConvNeXt → (B, 768, 1, 1)
-        feat = self.backbone(x)           # (B, 768, 1, 1)
-        feat = feat.view(feat.size(0), -1)  # (B, 768)
-
-        # Đưa qua LSTM — phải thêm chiều seq_len = 1 → (B, 1, 768)
-        feat = feat.unsqueeze(1)          # (B, 1, 768)
-        lstm_out, _ = self.lstm(feat)     # (B, 1, hidden_dim)
-
-        # Lấy output ở thời điểm cuối cùng (vì seq_len = 1 nên là [:, -1])
-        out = self.fc(lstm_out[:, -1])    # (B, num_classes)
+        lstm_out, _ = self.lstm(feat)        # (B, T, hidden_dim)
+        out = self.fc(lstm_out[:, -1])       # (B, num_classes)
 
         return out

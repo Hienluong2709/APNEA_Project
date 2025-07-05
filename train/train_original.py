@@ -1,38 +1,46 @@
+import os
+import sys
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.utils.data import DataLoader
-import sys
-import os
-
-# Thêm thư mục gốc vào sys.path để import models và dataset
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-try:
-    from torchvision.models.convnext import convnext_tiny
-except ModuleNotFoundError:
-    raise ImportError("❌ Bạn chưa cài torchvision. Vui lòng chạy: pip install torchvision")
-
-from models.convnext_lstm import ConvNeXtLSTM
-from dataset.lazy_apnea_dataset import LazyApneaDataset
+from torch.utils.data import DataLoader, ConcatDataset
 from sklearn.metrics import accuracy_score, f1_score
 
-# Config
-BLOCK_DIR = "data/blocks"
+# Add path
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
+from models.convnext_lstm import ConvNeXtLSTM
+from dataset.patient_block_dataset import PatientBlockDataset  # Dataset chia theo bệnh nhân
+
+# Cấu hình
+BLOCKS_DIR = "data/blocks"
+SEQ_LEN = 5
 BATCH_SIZE = 8
 EPOCHS = 10
-
-# Load dataset từ nhiều block theo cách tiết kiệm RAM
-train_set = LazyApneaDataset(block_dir=BLOCK_DIR)
-train_loader = DataLoader(train_set, batch_size=BATCH_SIZE, shuffle=True,num_workers=0)
-
-# Khởi tạo mô hình
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+# Load theo từng bệnh nhân
+all_datasets = []
+patient_dirs = [os.path.join(BLOCKS_DIR, d) for d in os.listdir(BLOCKS_DIR) if os.path.isdir(os.path.join(BLOCKS_DIR, d))]
+print(f"🧪 Phát hiện {len(patient_dirs)} bệnh nhân")
+
+for p_dir in patient_dirs:
+    ds = PatientBlockDataset(p_dir, seq_len=SEQ_LEN)
+    if len(ds) > 0:
+        all_datasets.append(ds)
+
+if not all_datasets:
+    raise ValueError("❌ Không tìm thấy dữ liệu blocks")
+
+full_dataset = ConcatDataset(all_datasets)
+train_loader = DataLoader(full_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=0)
+
+# Mô hình
 model = ConvNeXtLSTM().to(device)
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.AdamW(model.parameters(), lr=3e-4)
 
-# Train loop
+# Huấn luyện
 for epoch in range(EPOCHS):
     model.train()
     all_preds, all_labels = [], []
@@ -49,7 +57,6 @@ for epoch in range(EPOCHS):
         preds = pred.argmax(1).detach().cpu().numpy()
         all_preds.extend(preds)
         all_labels.extend(y.cpu().numpy())
-        
 
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds)
