@@ -10,10 +10,12 @@ from sklearn.metrics import accuracy_score, f1_score
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from models.convnext_lstm import ConvNeXtLSTM
-from dataset.patient_block_dataset import PatientBlockDataset  # Dataset chia theo bệnh nhân
+from dataset.lazy_apnea_dataset import PatientBlockDataset
 
 # Cấu hình
 BLOCKS_DIR = "data/blocks"
+print("✅ Đường dẫn BLOCKS_DIR:", os.path.abspath(BLOCKS_DIR))
+print("📁 Danh sách thư mục/file trong BLOCKS_DIR:", os.listdir(BLOCKS_DIR))
 SEQ_LEN = 5
 BATCH_SIZE = 8
 EPOCHS = 10
