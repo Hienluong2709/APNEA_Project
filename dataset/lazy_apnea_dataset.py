@@ -4,48 +4,39 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-class PatientBlockDataset(Dataset):
-    def __init__(self, block_dir, seq_len=5):
-        self.seq_len = seq_len
-        self.X_paths = []
-        self.y_paths = []
-        self.index_map = []  # (block_index, item_start_index)
+class LazyApneaDataset(Dataset):
+    def __init__(self, block_dir):
+        self.X_paths = sorted(glob.glob(os.path.join(block_dir, "X_*.npy")))
+        self.y_paths = sorted(glob.glob(os.path.join(block_dir, "y_*.npy")))
+        
+        if not self.X_paths:
+            raise ValueError(f"❌ Không tìm thấy dữ liệu X_*.npy trong thư mục {block_dir}")
+        if not self.y_paths:
+            raise ValueError(f"❌ Không tìm thấy dữ liệu y_*.npy trong thư mục {block_dir}")
+        
+        print(f"📊 Tìm thấy {len(self.X_paths)} blocks dữ liệu")
 
-        x_files = sorted(glob.glob(os.path.join(block_dir, "X_*.npy")))
-        y_files = sorted(glob.glob(os.path.join(block_dir, "y_*.npy")))
+        self.index_map = []  # lưu (index block, index trong block)
 
-        for x_path, y_path in zip(x_files, y_files):
-            x_data = np.load(x_path, mmap_mode='r')
-            y_data = np.load(y_path, mmap_mode='r')
-
-            if len(x_data) < self.seq_len:
-                continue  # Bỏ qua block quá ngắn
-
-            self.X_paths.append(x_path)
-            self.y_paths.append(y_path)
-
-            block_index = len(self.X_paths) - 1
-            print(f"✅ Đã load block từ {block_dir}, shape: {x_data.shape}")
-
-            for i in range(len(x_data) - self.seq_len + 1):
-                self.index_map.append((block_index, i))
+        for i, path in enumerate(self.X_paths):
+            x = np.load(path, mmap_mode='r')
+            print(f"✅ Đã load block {i} với shape: {x.shape}")
+            for j in range(len(x)):
+                self.index_map.append((i, j))
+                
+        print(f"📈 Tổng số mẫu: {len(self.index_map)}")
 
     def __len__(self):
         return len(self.index_map)
 
     def __getitem__(self, idx):
-        block_idx, start_idx = self.index_map[idx]
-        x_data = np.load(self.X_paths[block_idx], mmap_mode='r')
-        y_data = np.load(self.y_paths[block_idx], mmap_mode='r')
-
-        x_seq = x_data[start_idx : start_idx + self.seq_len]  # [seq_len, H, W] hoặc [seq_len, C, H, W]
-        y_label = y_data[start_idx + self.seq_len - 1]
-
-        # Nếu mỗi ảnh chỉ có 2D (H, W) → thêm chiều channel C=1
-        if len(x_seq.shape) == 3:  # [seq_len, H, W]
-            x_seq = np.expand_dims(x_seq, axis=1)  # → [seq_len, 1, H, W]
-
-        x_tensor = torch.tensor(x_seq, dtype=torch.float32)  # [seq_len, C, H, W]
-        y_tensor = torch.tensor(y_label, dtype=torch.long)
+        block_idx, item_idx = self.index_map[idx]
+        x = np.load(self.X_paths[block_idx], mmap_mode='r')[item_idx]
+        y = np.load(self.y_paths[block_idx], mmap_mode='r')[item_idx]
+        
+        # x có shape (64, 684), cần thêm chiều kênh để thành (1, 64, 684)
+        x_tensor = torch.tensor(x, dtype=torch.float32).unsqueeze(0)
+        y_tensor = torch.tensor(y, dtype=torch.long)
+        
         return x_tensor, y_tensor
 

@@ -4,10 +4,18 @@ from tqdm import tqdm
 import librosa
 
 # ================== Cấu hình ==================
-INPUT_DIR = "data"
+# Đường dẫn tuyệt đối đến thư mục archive
+INPUT_DIR = "D:\\HoiNghiKhoaHoc\\archive"
 PSG_DIR = os.path.join(INPUT_DIR, "PSG-AUDIO", "APNEA_EDF")
 LABEL_DIR = os.path.join(INPUT_DIR, "APNEA_types")
-OUTPUT_DIR = "data/blocks"
+
+# Đường dẫn lưu trữ đầu ra
+current_dir = os.path.dirname(os.path.abspath(__file__))
+project_dir = os.path.abspath(os.path.join(current_dir, ".."))
+
+OUTPUT_DIR = os.path.join(project_dir, "data", "blocks")
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
 BATCH_SIZE = 2000  # Số mẫu mỗi block
 SR = 16000         # Sampling rate
 
@@ -52,6 +60,16 @@ def save_batch(x, y, idx, save_dir):
     del x_batch, y_batch
 
 # ================== Xử lý tất cả bệnh nhân ==================
+# Kiểm tra đường dẫn
+print(f"📁 Đang tìm kiếm bệnh nhân trong: {PSG_DIR}")
+print(f"📁 Đường dẫn nhãn: {LABEL_DIR}")
+print(f"📁 Đường dẫn lưu trữ: {OUTPUT_DIR}")
+
+if not os.path.exists(PSG_DIR):
+    raise ValueError(f"❌ Đường dẫn PSG_DIR không tồn tại: {PSG_DIR}")
+if not os.path.exists(LABEL_DIR):
+    raise ValueError(f"❌ Đường dẫn LABEL_DIR không tồn tại: {LABEL_DIR}")
+
 patients = [f for f in os.listdir(PSG_DIR) if os.path.isdir(os.path.join(PSG_DIR, f))]
 print(f"📁 Tổng số bệnh nhân: {len(patients)}")
 
@@ -76,6 +94,7 @@ for p in tqdm(patients):
 
     # Chuẩn bị cho block của từng bệnh nhân
     save_dir = os.path.join(OUTPUT_DIR, p)
+    os.makedirs(save_dir, exist_ok=True)
     batch_x, batch_y = [], []
     batch_idx = 0
 
