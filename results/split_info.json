@@ -1,0 +1,11 @@
+{
+    "split_type": "random",
+    "train_patients": null,
+    "val_patients": null,
+    "additional_info": {
+        "train_ratio": 0.8,
+        "seed": 42,
+        "train_samples": 82012,
+        "val_samples": 20503
+    }
+}
