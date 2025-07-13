@@ -128,7 +128,7 @@ def load_data(data_root, seq_len=5, batch_size=8):
     return train_loader, val_loader, test_loader
 
 
-def predict_and_save_csv_per_block(model, data_root, device, seq_len=10):
+def predict_and_save_csv_per_block(model, data_root, device, seq_len=5):
     model.eval()
     os.makedirs("predictions", exist_ok=True)
     patients = sorted(os.listdir(data_root))
@@ -176,12 +176,12 @@ if __name__ == "__main__":
     os.makedirs("/content/drive/MyDrive/checkpoints", exist_ok=True)
     print("🚀 Bắt đầu huấn luyện ConvNeXt-LSTM sequence...")
 
-    train_loader, val_loader, test_loader = load_data(data_path, seq_len=10, batch_size=8)
+    train_loader, val_loader, test_loader = load_data(data_path, seq_len=5, batch_size=8)
     model = ConvNeXtLSTMLiteSequence(num_classes=2)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # Nếu muốn resume từ checkpoint, truyền đường dẫn ở đây:
     resume_ckpt = "/content/drive/MyDrive/checkpoints/convnext_lstm_seq_best.pth"
-    train(model, train_loader, val_loader, test_loader, device, epochs=20, resume_path=resume_ckpt)
+    train(model, train_loader, val_loader, test_loader, device, epochs=5, resume_path=resume_ckpt)
 
     predict_and_save_csv_per_block(model, data_path, device)
