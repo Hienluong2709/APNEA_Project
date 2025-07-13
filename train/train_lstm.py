@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, ConcatDataset
 from sklearn.metrics import f1_score, accuracy_score
 import pandas as pd
 
-# Thêm thư mục gốc vào sys.path
+# Gắn thư mục project vào sys.path (đảm bảo import đúng)
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(project_root)
 
@@ -104,10 +104,10 @@ def load_data(data_root, seq_len=10, batch_size=8):
     total_len = len(full_dataset)
     print(f"📊 Tổng số sequence: {total_len}")
 
-    # Chia 80/10/10
     train_len = int(0.8 * total_len)
     val_len = int(0.1 * total_len)
     test_len = total_len - train_len - val_len
+
     train_ds, val_ds, test_ds = torch.utils.data.random_split(full_dataset, [train_len, val_len, test_len])
 
     train_loader = DataLoader(train_ds, batch_size=batch_size, shuffle=True, num_workers=0)
@@ -157,14 +157,19 @@ def predict_and_save_csv_per_block(model, data_root, device, seq_len=10):
 
 
 if __name__ == "__main__":
+    # Đường dẫn dữ liệu từ Google Drive
+    data_path = "/content/drive/MyDrive/data/blocks"
+
+    if not os.path.exists(data_path):
+        raise RuntimeError(f"❌ Không tìm thấy thư mục: {data_path}")
+
     os.makedirs("checkpoints", exist_ok=True)
     print("🚀 Bắt đầu huấn luyện ConvNeXt-LSTM sequence...")
 
-    train_loader, val_loader, test_loader = load_data("data/blocks", seq_len=10, batch_size=8)
+    train_loader, val_loader, test_loader = load_data(data_path, seq_len=10, batch_size=8)
     model = ConvNeXtLSTMLiteSequence(num_classes=2)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     train(model, train_loader, val_loader, test_loader, device)
 
-    # 🔁 Dự đoán và lưu CSV theo từng block
-    predict_and_save_csv_per_block(model, "data/blocks", device)
+    predict_and_save_csv_per_block(model, data_path, device)
