@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, ConcatDataset
 from sklearn.metrics import f1_score, accuracy_score
+from tqdm import tqdm
 import pandas as pd
 
 # Gắn thư mục project vào sys.path (đảm bảo import đúng)
@@ -35,20 +36,25 @@ def evaluate(model, dataloader, device, name=""):
     return acc, f1
 
 
-def train(model, train_loader, val_loader, test_loader, device, epochs=20, lr=3e-4):
+def train(model, train_loader, val_loader, test_loader, device, epochs=20, lr=3e-4, resume_path=None):
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
 
     best_f1 = 0
-    for epoch in range(epochs):
+    start_epoch = 0
+
+    # Resume từ checkpoint nếu có
+    if resume_path and os.path.exists(resume_path):
+        print(f"🔄 Resume from checkpoint: {resume_path}")
+        model.load_state_dict(torch.load(resume_path))
+
+    for epoch in range(start_epoch, epochs):
         model.train()
         all_preds, all_labels = [], []
 
         print(f"\n🔁 Epoch {epoch + 1}/{epochs} - Training...")
-        for i, (x, y) in enumerate(train_loader):
-            if i == 0:
-                print("✅ Đã load batch đầu tiên!")
+        for i, (x, y) in tqdm(enumerate(train_loader), total=len(train_loader)):
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
 
@@ -67,9 +73,14 @@ def train(model, train_loader, val_loader, test_loader, device, epochs=20, lr=3e
         train_acc = accuracy_score(all_labels, all_preds)
         val_acc, val_f1 = evaluate(model, val_loader, device, name="Validation")
 
+        # Lưu checkpoint tốt nhất
         if val_f1 > best_f1:
             best_f1 = val_f1
-            torch.save(model.state_dict(), "checkpoints/convnext_lstm_seq_best.pth")
+            torch.save(model.state_dict(), "/content/drive/MyDrive/checkpoints/convnext_lstm_seq_best.pth")
+
+        # Lưu định kỳ mỗi 2 epoch
+        if (epoch + 1) % 2 == 0:
+            torch.save(model.state_dict(), f"/content/drive/MyDrive/checkpoints/epoch_{epoch+1}.pth")
 
         print(f"[Epoch {epoch + 1}] Train F1: {train_f1:.4f}, Val F1: {val_f1:.4f}, "
               f"Train Acc: {train_acc:.4f}, Val Acc: {val_acc:.4f}")
@@ -77,7 +88,7 @@ def train(model, train_loader, val_loader, test_loader, device, epochs=20, lr=3e
     print(f"\n✅ Huấn luyện hoàn tất. Best Val F1: {best_f1:.4f}")
 
     # Đánh giá trên tập test
-    model.load_state_dict(torch.load("checkpoints/convnext_lstm_seq_best.pth"))
+    model.load_state_dict(torch.load("/content/drive/MyDrive/checkpoints/convnext_lstm_seq_best.pth"))
     evaluate(model, test_loader, device, name="Testing")
 
 
@@ -157,19 +168,20 @@ def predict_and_save_csv_per_block(model, data_root, device, seq_len=10):
 
 
 if __name__ == "__main__":
-    # Đường dẫn dữ liệu từ Google Drive
     data_path = "/content/drive/MyDrive/data/blocks"
 
     if not os.path.exists(data_path):
         raise RuntimeError(f"❌ Không tìm thấy thư mục: {data_path}")
 
-    os.makedirs("checkpoints", exist_ok=True)
+    os.makedirs("/content/drive/MyDrive/checkpoints", exist_ok=True)
     print("🚀 Bắt đầu huấn luyện ConvNeXt-LSTM sequence...")
 
     train_loader, val_loader, test_loader = load_data(data_path, seq_len=10, batch_size=8)
     model = ConvNeXtLSTMLiteSequence(num_classes=2)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    train(model, train_loader, val_loader, test_loader, device)
+    # Nếu muốn resume từ checkpoint, truyền đường dẫn ở đây:
+    resume_ckpt = "/content/drive/MyDrive/checkpoints/convnext_lstm_seq_best.pth"
+    train(model, train_loader, val_loader, test_loader, device, epochs=20, resume_path=resume_ckpt)
 
     predict_and_save_csv_per_block(model, data_path, device)
