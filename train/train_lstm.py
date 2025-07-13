@@ -36,7 +36,7 @@ def evaluate(model, dataloader, device, name=""):
     return acc, f1
 
 
-def train(model, train_loader, val_loader, test_loader, device, epochs=20, lr=3e-4, resume_path=None):
+def train(model, train_loader, val_loader, test_loader, device, epochs=5, lr=3e-4, resume_path=None):
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -92,7 +92,7 @@ def train(model, train_loader, val_loader, test_loader, device, epochs=20, lr=3e
     evaluate(model, test_loader, device, name="Testing")
 
 
-def load_data(data_root, seq_len=10, batch_size=8):
+def load_data(data_root, seq_len=5, batch_size=8):
     patients = sorted(os.listdir(data_root))
     datasets = []
 
