@@ -85,14 +85,14 @@ def train_and_evaluate_ahi_regression(pred_dir, ahi_csv="ahi_labels.csv"):
     df_result["error"] = df_result["ahi_pred"] - df_result["ahi_psg"]
     df_result["osa_pred_level"] = df_result["ahi_pred"].apply(classify_osa)
 
-    df_result.to_csv("ahi_estimation_results.csv", index=False)
-    print("\n✅ Đã lưu kết quả vào ahi_estimation_results.csv")
+    df_result.to_csv("ahi_estimation_results2.csv", index=False)
+    print("\n✅ Đã lưu kết quả vào ahi_estimation_results2.csv")
 
     return model
 
 
 if __name__ == "__main__":
-    pred_dir = "predictions"               
+    pred_dir = "prediction"               
     ahi_csv_path = "ahi_labels.csv"        
 
     train_and_evaluate_ahi_regression(pred_dir, ahi_csv_path)
