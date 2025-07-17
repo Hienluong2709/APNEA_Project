@@ -45,21 +45,31 @@ except ImportError:
 
 
 def evaluate(model, dataloader, device, name=""):
-    """Đánh giá mô hình - format giống LSTM"""
+    """Đánh giá mô hình binary classification - format giống LSTM"""
     model.eval()
     all_preds, all_labels = [], []
+    
     with torch.no_grad():
         for x, y in dataloader:
-            x, y = x.to(device), y.to(device)
-            out = model(x)
-            preds = torch.argmax(out, dim=1)
-
-            all_preds.extend(preds.cpu().numpy())
-            all_labels.extend(y.cpu().numpy())
+            x, y = x.to(device), y.to(device).float()
+            
+            # Ensure y is the right shape for binary classification
+            if y.dim() > 1:
+                y = y.squeeze()
+            
+            out = model(x).squeeze()
+            
+            # Convert to binary predictions (0 or 1)
+            binary_preds = (torch.sigmoid(out) > 0.5).cpu().numpy().astype(int)
+            all_preds.extend(binary_preds)
+            all_labels.extend(y.cpu().numpy().astype(int))
 
     acc = accuracy_score(all_labels, all_preds)
     f1 = f1_score(all_labels, all_preds)
-    print(f"📊 {name} - Accuracy: {acc:.4f}, F1-score: {f1:.4f}")
+    precision = precision_score(all_labels, all_preds, zero_division=0)
+    recall = recall_score(all_labels, all_preds, zero_division=0)
+    
+    print(f"📊 {name} - Acc: {acc:.4f}, F1: {f1:.4f}, Precision: {precision:.4f}, Recall: {recall:.4f}")
     return acc, f1
 
 
@@ -68,29 +78,33 @@ def count_parameters(model):
     return sum(p.numel() for p in model.parameters() if p.requires_grad)
 
 
-def train_simple(model, train_loader, val_loader, test_loader, device, epochs=70, lr=5e-5, resume_path=None):
-    """Huấn luyện mô hình - format giống LSTM"""
+def train_simple(model, train_loader, val_loader, test_loader, device, epochs=30, lr=5e-5, resume_path=None):
+    """Huấn luyện mô hình binary classification - format giống LSTM"""
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.008)
-    criterion = nn.CrossEntropyLoss()
+    criterion = nn.BCEWithLogitsLoss()  # Binary classification loss
 
     best_f1 = 0
     start_epoch = 0
-    patience = 15
+    patience = 10
     patience_counter = 0
 
     # Resume từ checkpoint nếu có
     if resume_path and os.path.exists(resume_path):
         print(f"🔄 Resume from checkpoint: {resume_path}")
-        checkpoint = torch.load(resume_path)
-        if isinstance(checkpoint, dict):
-            model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
-            if 'optimizer_state_dict' in checkpoint:
-                optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-            start_epoch = checkpoint.get('epoch', 0)
-            best_f1 = checkpoint.get('best_f1', 0)
-        else:
-            model.load_state_dict(checkpoint)
+        try:
+            checkpoint = torch.load(resume_path, map_location=device)
+            if isinstance(checkpoint, dict):
+                model.load_state_dict(checkpoint.get('model_state_dict', checkpoint))
+                if 'optimizer_state_dict' in checkpoint:
+                    optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+                start_epoch = checkpoint.get('epoch', 0)
+                best_f1 = checkpoint.get('best_f1', 0)
+            else:
+                model.load_state_dict(checkpoint)
+            print(f"✅ Loaded checkpoint with F1: {best_f1:.4f}")
+        except Exception as e:
+            print(f"⚠️ Cannot load checkpoint: {e}")
 
     for epoch in range(start_epoch, epochs):
         model.train()
@@ -99,22 +113,32 @@ def train_simple(model, train_loader, val_loader, test_loader, device, epochs=70
 
         print(f"\n🔁 Epoch {epoch + 1}/{epochs} - Training...")
         for i, (x, y) in tqdm(enumerate(train_loader), total=len(train_loader)):
-            x, y = x.to(device), y.to(device)
+            x, y = x.to(device), y.to(device).float()  # Convert to float for BCE loss
+            
+            # Ensure y is the right shape for binary classification
+            if y.dim() > 1:
+                y = y.squeeze()
+            
             optimizer.zero_grad()
 
-            out = model(x)
+            out = model(x).squeeze()  # Remove extra dimensions for binary output
             loss = criterion(out, y)
 
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
 
-            all_preds.extend(out.argmax(1).cpu().numpy())
-            all_labels.extend(y.cpu().numpy())
+            # Convert to binary predictions (0 or 1)
+            binary_preds = (torch.sigmoid(out) > 0.5).cpu().numpy().astype(int)
+            all_preds.extend(binary_preds)
+            all_labels.extend(y.cpu().numpy().astype(int))
 
         train_f1 = f1_score(all_labels, all_preds)
         train_acc = accuracy_score(all_labels, all_preds)
         val_acc, val_f1 = evaluate(model, val_loader, device, name="Validation")
+
+        print(f"📊 Epoch {epoch+1}: Train F1={train_f1:.4f}, Train Acc={train_acc:.4f}")
+        print(f"          Val F1={val_f1:.4f}, Val Acc={val_acc:.4f}")
 
         # Lưu checkpoint tốt nhất
         if val_f1 > best_f1:
@@ -248,40 +272,64 @@ def predict_and_save_csv_per_block(model, data_root, device, seq_len=5):
 
 def main_simple():
     """Hàm main đơn giản giống LSTM"""
-    data_path = os.path.abspath("../data/blocks")
+    print("🚀 ConvNeXt+Transformer Training với Binary Predictions (Dependent)")
+    print("📋 Workflow: Train → Binary (0,1) → 2 CSV files → MAE/RMSE/PCC")
+    
+    # Lấy đường dẫn project_dir từ biến global đã định nghĩa ở đầu file
+    data_path = os.path.join(project_dir, "data", "blocks")
 
     if not os.path.exists(data_path):
         raise RuntimeError(f"❌ Không tìm thấy thư mục: {data_path}")
 
     os.makedirs("checkpoints", exist_ok=True)
-    print("🚀 Bắt đầu huấn luyện ConvNeXt-Transformer (Dependent Subject)...")
+    
+    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    print(f"🔧 Device: {device}")
 
     # Load data với Dependent Subject approach (shuffle tất cả patients)
-    train_loader, val_loader, test_loader = load_data(data_path, seq_len=5, batch_size=48)
+    train_loader, val_loader, test_loader = load_data(data_path, seq_len=5, batch_size=32)
     
-    # Khởi tạo model với parameters tối ưu
+    # Khởi tạo model với parameters tối ưu - QUAN TRỌNG: num_classes=1 cho binary
     model = ConvNeXtTransformerLite(
-        num_classes=2,
+        num_classes=1,     # 1 output cho binary classification
         embed_dim=160,
         num_heads=5,
         num_transformer_layers=4,
-        dropout=0.1
+        dropout=0.08
     )
     
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
-    print(f"🖥️ Using device: {device}")
-    
     # Model summary
-    total_params = sum(p.numel() for p in model.parameters())
-    trainable_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    print(f"📊 Model Parameters: {total_params:,} total, {trainable_params:,} trainable")
+    total_params = count_parameters(model)
+    print(f"🏗️ Model: {total_params:,} parameters ({total_params/1e6:.2f}M)")
+    print(f"  Architecture: ConvNeXt + Transformer → Binary output (0,1)")
 
-    # Training
+    # STEP 1: Training
+    print("\n🚀 STEP 1: Training model...")
     resume_ckpt = "checkpoints/ConvNeXtTransformerLite_best_f1.pth"
-    model, best_f1 = train_simple(model, train_loader, val_loader, test_loader, device, epochs=70, lr=5e-5, resume_path=resume_ckpt)
+    model, best_f1 = train_simple(model, train_loader, val_loader, test_loader, device, epochs=30, lr=5e-5, resume_path=resume_ckpt)
 
-    # Generate predictions CSV
-    predict_and_save_csv_per_block(model, data_path, device)
+    # Tạo full dataset cho predictions
+    from dataset.lazy_apnea_dataset import LazyApneaDataset
+    full_dataset = LazyApneaDataset(data_path, seq_len=5, use_cache=True)
+    
+    # STEP 2: Tạo 2 file CSV từ binary predictions
+    print("\n📊 STEP 2: Tạo 2 CSV files từ binary predictions...")
+    
+    # File 1: Model binary predictions → AHI
+    model_df, model_csv = create_model_predictions_csv(model, full_dataset, device)
+    
+    # File 2: True labels → True AHI
+    psg_df, psg_csv = create_ahi_psg_csv(full_dataset)
+    
+    # STEP 3: So sánh 2 files và tính MAE, RMSE, PCC
+    comparison_df, final_metrics = compare_files_and_calculate_metrics(model_csv, psg_csv)
+    
+    print("\n✅ HOÀN THÀNH! Binary predictions workflow (Dependent)!")
+    print("🎯 Train → Binary (0,1) → CSV files → MAE/RMSE/PCC calculation")
+    if final_metrics:
+        print(f"🏆 Final PCC: {final_metrics['pcc']:.4f}")
+    
+    optimize_memory()
     """Giải phóng bộ nhớ cache và thu gom rác"""
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
@@ -387,16 +435,35 @@ def calculate_ahi_from_predictions(true_labels, pred_labels, epoch_duration_seco
     return true_ahi, pred_ahi, metrics
 
 
+# Helper functions cho binary prediction workflow
+def calculate_ahi_from_binary_predictions(binary_array, epoch_duration_seconds=30):
+    """
+    Tính AHI từ chuỗi binary predictions
+    AHI = (số epoch có apnea * epochs_per_hour) / total_hours
+    """
+    if len(binary_array) == 0:
+        return 0.0
+    
+    epochs_per_hour = 3600 / epoch_duration_seconds  # 120 epochs/hour với 30s/epoch
+    total_hours = len(binary_array) / epochs_per_hour
+    apnea_events = np.sum(binary_array == 1)
+    
+    if total_hours <= 0:
+        return 0.0
+    
+    ahi = apnea_events / total_hours
+    return float(ahi)
+
 def classify_osa_severity(ahi):
-    """Phân loại mức độ nghiêm trọng của OSA"""
+    """Phân loại mức độ nghiêm trọng OSA"""
     if ahi < 5:
-        return "Normal"
+        return 'Normal'
     elif ahi < 15:
-        return "Mild"
+        return 'Mild'
     elif ahi < 30:
-        return "Moderate"
+        return 'Moderate'
     else:
-        return "Severe"
+        return 'Severe'
 
 
 def dependent_subject_split_optimized(datasets, patient_ids, train_ratio=0.8, seed=42):
@@ -682,180 +749,196 @@ def train_model(model, train_loader, val_loader, epochs=20, lr=1e-3, device='cud
     return model, best_val_f1
 
 
-def create_model_predictions_csv(model, datasets, patient_ids, device='cuda', output_path='results/model_predictions.csv'):
-    """Tạo file CSV chứa dự đoán của mô hình"""
-    print("📊 Tạo file CSV dự đoán mô hình...")
+def create_model_predictions_csv(model, full_dataset, device):
+    """
+    BƯỚC 2A: Tạo File 1 - Model binary predictions → AHI cho từng patient
+    """
+    print("🔍 BƯỚC 2A: Tạo File 1 - Model predictions...")
+    model.eval()
     
-    model_results = []
+    results_dir = os.path.join(project_dir, 'results')
+    os.makedirs(results_dir, exist_ok=True)
     
-    for i, (dataset, patient_id) in enumerate(zip(datasets, patient_ids)):
-        print(f"⏳ Xử lý bệnh nhân {patient_id}...")
-        
-        # DataLoader cho bệnh nhân
-        patient_loader = DataLoader(dataset, batch_size=32, shuffle=False, num_workers=0)
-        
-        # Dự đoán
-        model.eval()
-        all_preds = []
-        all_labels = []
-        
-        with torch.no_grad():
-            for x, y in patient_loader:
-                x = x.to(device)
-                outputs = model(x)
-                preds = outputs.argmax(1).cpu().numpy()
-                all_preds.extend(preds)
-                all_labels.extend(y.numpy())
-        
-        # Tính AHI từ dự đoán
-        if len(all_preds) > 0:
-            true_ahi, pred_ahi, metrics = calculate_ahi_from_predictions(
-                np.array(all_labels), np.array(all_preds)
-            )
-            
-            true_severity = classify_osa_severity(true_ahi)
-            pred_severity = classify_osa_severity(pred_ahi)
-            
-            model_results.append({
-                'patient_id': patient_id,
-                'predicted_ahi': pred_ahi,
-                'predicted_severity': pred_severity,
-                'true_ahi_from_labels': true_ahi,  # AHI tính từ nhãn thực tế
-                'true_severity_from_labels': true_severity,
-                'sample_count': len(all_preds),
-                'apnea_ratio': np.mean(np.array(all_preds) == 1),
-                'mae_individual': metrics['mae'],
-                'rmse_individual': metrics['rmse']
-            })
+    predictions = []
     
-    # Lưu DataFrame
-    df = pd.DataFrame(model_results)
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    df.to_csv(output_path, index=False, encoding='utf-8-sig')
-    print(f"✅ Đã lưu dự đoán mô hình tại: {output_path}")
+    with torch.no_grad():
+        for patient_id in tqdm(full_dataset.patient_ids[:25], desc="Processing patients"):
+            try:
+                patient_data = full_dataset.get_patient_data(patient_id, limit_blocks=None)
+                
+                if not patient_data:
+                    continue
+                
+                # Process all blocks for this patient
+                patient_preds = []
+                for block_data in patient_data:
+                    try:
+                        if len(block_data) < 3:
+                            continue
+                            
+                        features = block_data[0]
+                        if features is None or features.size == 0:
+                            continue
+                        
+                        # Convert to tensor và predict
+                        features_tensor = torch.FloatTensor(features).unsqueeze(0).to(device)
+                        
+                        # Model prediction
+                        with autocast():
+                            outputs = model(features_tensor)
+                            
+                        # Convert to binary prediction (0 or 1)
+                        pred_prob = torch.sigmoid(outputs.squeeze()).cpu().numpy()
+                        binary_pred = 1 if pred_prob > 0.5 else 0
+                        patient_preds.append(binary_pred)
+                        
+                    except Exception as e:
+                        continue
+                
+                # Calculate AHI from binary predictions
+                if len(patient_preds) > 0:
+                    binary_array = np.array(patient_preds)
+                    predicted_ahi = calculate_ahi_from_binary_predictions(binary_array)
+                    predicted_severity = classify_osa_severity(predicted_ahi)
+                    
+                    predictions.append({
+                        'patient_id': patient_id,
+                        'predicted_ahi': predicted_ahi,
+                        'predicted_severity': predicted_severity,
+                        'total_epochs': len(patient_preds),
+                        'apnea_events_pred': np.sum(binary_array == 1),
+                        'normal_events_pred': np.sum(binary_array == 0),
+                        'total_sleep_hours': len(patient_preds) * 30 / 3600
+                    })
+                    
+            except Exception as e:
+                print(f"⚠️ Error processing {patient_id}: {e}")
     
-    return df
+    # Save FILE 1
+    predictions_df = pd.DataFrame(predictions)
+    predictions_csv = os.path.join(results_dir, 'model_predictions_dependent.csv')
+    predictions_df.to_csv(predictions_csv, index=False)
+    
+    print(f"✅ FILE 1 saved: {predictions_csv}")
+    print(f"  Format: Binary predictions → Predicted AHI cho {len(predictions)} patients")
+    return predictions_df, predictions_csv
 
-
-def create_ahi_psg_csv(datasets, patient_ids, output_path='results/ahi_psg.csv'):
-    """Tạo file CSV chứa AHI từ PSG (ground truth)"""
-    print("📊 Tạo file CSV AHI PSG...")
+def create_ahi_psg_csv(full_dataset):
+    """
+    BƯỚC 2B: Tạo File 2 - True labels → True AHI cho từng patient  
+    """
+    print("🔍 BƯỚC 2B: Tạo File 2 - True AHI PSG...")
+    
+    results_dir = os.path.join(project_dir, 'results')
+    os.makedirs(results_dir, exist_ok=True)
     
     psg_results = []
     
-    for i, (dataset, patient_id) in enumerate(zip(datasets, patient_ids)):
-        # Lấy tất cả nhãn thực tế từ dataset
-        all_labels = []
-        for j in range(len(dataset)):
-            try:
-                _, label = dataset[j]
-                all_labels.append(label.item())
-            except:
+    for patient_id in tqdm(full_dataset.patient_ids[:25], desc="Processing PSG"):
+        try:
+            patient_data = full_dataset.get_patient_data(patient_id, limit_blocks=None)
+            
+            if not patient_data:
                 continue
-        
-        if len(all_labels) > 0:
-            # Tính AHI thực tế từ nhãn PSG
-            all_labels = np.array(all_labels)
             
-            # Giả định mỗi epoch là 30 giây
-            total_time_hours = (len(all_labels) * 30) / 3600
-            apnea_count = np.sum(all_labels == 1)
-            ahi_psg = apnea_count / total_time_hours if total_time_hours > 0 else 0
+            # Collect true labels cho patient này
+            true_labels = []
+            for block_data in patient_data:
+                try:
+                    if len(block_data) < 3:
+                        continue
+                        
+                    label = block_data[1]  # True label
+                    if label is not None:
+                        true_labels.append(int(label))
+                        
+                except Exception as e:
+                    continue
             
-            severity_psg = classify_osa_severity(ahi_psg)
-            
-            # Tạo thêm một số thông tin PSG mô phỏng (có thể thay thế bằng dữ liệu thực)
-            # Thêm noise nhẹ để mô phỏng sự khác biệt giữa tự động và thủ công
-            ahi_variation = np.random.normal(0, ahi_psg * 0.1)  # 10% variation
-            ahi_psg_adjusted = max(0, ahi_psg + ahi_variation)
-            
-            psg_results.append({
-                'patient_id': patient_id,
-                'ahi_psg': ahi_psg_adjusted,
-                'severity_psg': classify_osa_severity(ahi_psg_adjusted),
-                'total_sleep_time_hours': total_time_hours,
-                'total_epochs': len(all_labels),
-                'apnea_events': apnea_count,
-                'sleep_efficiency': np.random.uniform(0.8, 0.95),  # Mock data
-                'rem_percentage': np.random.uniform(15, 25),        # Mock data
-                'deep_sleep_percentage': np.random.uniform(10, 20)  # Mock data
-            })
+            if len(true_labels) > 0:
+                # Convert true labels → true AHI
+                true_array = np.array(true_labels)
+                true_ahi = calculate_ahi_from_binary_predictions(true_array)
+                true_severity = classify_osa_severity(true_ahi)
+                
+                psg_results.append({
+                    'patient_id': patient_id,
+                    'ahi_psg': true_ahi,
+                    'severity_psg': true_severity,
+                    'total_epochs': len(true_labels),
+                    'apnea_events_true': np.sum(true_array == 1),
+                    'normal_events_true': np.sum(true_array == 0),
+                    'total_sleep_hours': len(true_labels) * 30 / 3600
+                })
+                
+        except Exception as e:
+            print(f"⚠️ Error processing {patient_id}: {e}")
     
-    # Lưu DataFrame
-    df = pd.DataFrame(psg_results)
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    df.to_csv(output_path, index=False, encoding='utf-8-sig')
-    print(f"✅ Đã lưu AHI PSG tại: {output_path}")
+    # Save FILE 2
+    psg_df = pd.DataFrame(psg_results)
+    psg_csv = os.path.join(results_dir, 'ahi_psg_dependent.csv')
+    psg_df.to_csv(psg_csv, index=False)
     
-    return df
+    print(f"✅ FILE 2 saved: {psg_csv}")
+    print(f"  Format: True labels → True AHI cho {len(psg_results)} patients")
+    return psg_df, psg_csv
 
-
-def compare_model_vs_psg(model_csv_path, psg_csv_path, output_path='results/comparison_results.csv'):
-    """So sánh kết quả mô hình vs PSG và tính MAE, RMSE, PCC"""
-    print("🔍 So sánh kết quả mô hình vs PSG...")
+def compare_files_and_calculate_metrics(model_csv, psg_csv):
+    """
+    BƯỚC 3: Đọc 2 file CSV và tính MAE, RMSE, PCC
+    """
+    print("🔍 BƯỚC 3: So sánh 2 files và tính MAE, RMSE, PCC...")
     
-    # Đọc dữ liệu
-    model_df = pd.read_csv(model_csv_path)
-    psg_df = pd.read_csv(psg_csv_path)
+    # Đọc 2 files
+    model_df = pd.read_csv(model_csv)
+    psg_df = pd.read_csv(psg_csv)
     
     # Merge theo patient_id
     merged_df = pd.merge(model_df, psg_df, on='patient_id', how='inner')
     
     if len(merged_df) == 0:
-        print("❌ Không có bệnh nhân nào trùng khớp giữa 2 file")
-        return None
+        print("❌ Không có patient nào match")
+        return None, None
     
-    print(f"✅ Số bệnh nhân trùng khớp: {len(merged_df)}")
+    print(f"✅ Matched {len(merged_df)} patients")
     
-    # Tính các chỉ số đánh giá
+    # Extract AHI values
     predicted_ahi = merged_df['predicted_ahi'].values
-    true_ahi_psg = merged_df['ahi_psg'].values
+    true_ahi = merged_df['ahi_psg'].values
     
-    # MAE, RMSE
-    mae = np.mean(np.abs(predicted_ahi - true_ahi_psg))
-    rmse = np.sqrt(np.mean((predicted_ahi - true_ahi_psg)**2))
+    # Calculate metrics
+    mae = mean_absolute_error(true_ahi, predicted_ahi)
+    rmse = np.sqrt(mean_squared_error(true_ahi, predicted_ahi))
     
     # PCC (Pearson Correlation Coefficient)
-    from scipy.stats import pearsonr
-    try:
-        pcc, p_value = pearsonr(predicted_ahi, true_ahi_psg)
-    except:
-        pcc, p_value = 0.0, 1.0
+    correlation_matrix = np.corrcoef(predicted_ahi, true_ahi)
+    pcc = correlation_matrix[0, 1] if not np.isnan(correlation_matrix[0, 1]) else 0.0
     
-    # R² score
-    from sklearn.metrics import r2_score
-    r2 = r2_score(true_ahi_psg, predicted_ahi)
+    # Create comparison DataFrame
+    comparison_df = merged_df[['patient_id', 'predicted_ahi', 'ahi_psg']].copy()
+    comparison_df['absolute_error'] = np.abs(predicted_ahi - true_ahi)
+    comparison_df['squared_error'] = (predicted_ahi - true_ahi) ** 2
     
-    # Accuracy phân loại severity
-    severity_accuracy = (merged_df['predicted_severity'] == merged_df['severity_psg']).mean()
+    # Save comparison file
+    results_dir = os.path.join(project_dir, 'results')
+    comparison_csv = os.path.join(results_dir, 'ahi_comparison_dependent.csv')
+    comparison_df.to_csv(comparison_csv, index=False)
     
-    # In kết quả
-    print(f"\n📈 KẾT QUẢ SO SÁNH MÔ HÌNH VS PSG:")
-    print(f"  MAE: {mae:.2f}")
-    print(f"  RMSE: {rmse:.2f}")
-    print(f"  PCC: {pcc:.4f} (p-value: {p_value:.4f})")
-    print(f"  R² Score: {r2:.4f}")
-    print(f"  Severity Accuracy: {severity_accuracy:.2f}")
+    # Final metrics
+    final_metrics = {
+        'mae': mae,
+        'rmse': rmse,
+        'pcc': pcc,
+        'num_patients': len(merged_df)
+    }
     
-    # Thêm thông tin so sánh vào DataFrame
-    merged_df['ahi_error'] = predicted_ahi - true_ahi_psg
-    merged_df['ahi_error_abs'] = np.abs(merged_df['ahi_error'])
-    merged_df['ahi_error_pct'] = (merged_df['ahi_error'] / true_ahi_psg) * 100
-    merged_df['severity_match'] = merged_df['predicted_severity'] == merged_df['severity_psg']
+    print(f"📊 FINAL METRICS (Dependent Subject):")
+    print(f"  👥 Patients: {final_metrics['num_patients']}")
+    print(f"  📉 MAE: {final_metrics['mae']:.4f}")
+    print(f"  📉 RMSE: {final_metrics['rmse']:.4f}")
+    print(f"  🎯 PCC: {final_metrics['pcc']:.4f}")
     
-    # Thêm overall metrics
-    merged_df['overall_mae'] = mae
-    merged_df['overall_rmse'] = rmse
-    merged_df['overall_pcc'] = pcc
-    merged_df['overall_r2'] = r2
-    merged_df['overall_severity_acc'] = severity_accuracy
-    
-    # Lưu kết quả
-    os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    merged_df.to_csv(output_path, index=False, encoding='utf-8-sig')
-    print(f"✅ Đã lưu kết quả so sánh tại: {output_path}")
-    
-    return merged_df, {'mae': mae, 'rmse': rmse, 'pcc': pcc, 'r2': r2, 'severity_acc': severity_accuracy}
+    return comparison_df, final_metrics
 
 
 def main():
@@ -1082,7 +1165,7 @@ def main():
         
         # 3. So sánh 2 file CSV để tính MAE, RMSE, PCC
         comparison_csv_path = os.path.join(results_dir, 'comparison_results.csv')
-        comparison_df, metrics = compare_model_vs_psg(model_csv_path, psg_csv_path, comparison_csv_path)
+        comparison_df, metrics = compare_files_and_calculate_metrics(model_csv_path, psg_csv_path)
         
         if comparison_df is not None:
             print(f"\n🎯 SUMMARY METRICS (Dependent Subject):")
@@ -1102,6 +1185,19 @@ def main():
     except Exception as e:
         print(f"❌ Lỗi khi tạo CSV và so sánh: {e}")
         traceback.print_exc()
+
+
+def optimize_memory():
+    """Giải phóng bộ nhớ cache và thu gom rác"""
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    gc.collect()
+    
+    # Thêm giải phóng bộ nhớ CUDA không sử dụng
+    torch.cuda.empty_cache()
+    
+    # Đặt biến môi trường để giới hạn cache PyTorch
+    os.environ['PYTORCH_CUDA_ALLOC_CONF'] = 'max_split_size_mb:32'
 
 
 if __name__ == "__main__":

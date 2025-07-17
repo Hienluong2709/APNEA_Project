@@ -78,7 +78,7 @@ def evaluate(model, dataloader, device, desc="Evaluation"):
 
 
 def train_simple(model, train_loader, val_loader, device, epochs=50):
-    """Huấn luyện mô hình - phiên bản đơn giản giống LSTM"""
+    """Huấn luyện mô hình - phiên bản đơn giản """
     criterion = nn.BCEWithLogitsLoss()
     optimizer = optim.Adam(model.parameters(), lr=2e-5, weight_decay=0.005)
     
@@ -170,48 +170,240 @@ def load_data():
     return train_loader, val_loader, test_loader, full_dataset
 
 
-def predict_and_save_csv_per_block(model, full_dataset, device):
-    """Tạo predictions cho từng block và lưu CSV - phiên bản đơn giản"""
-    model.eval()
-    predictions_dir = os.path.join(project_dir, 'predictions')
-    os.makedirs(predictions_dir, exist_ok=True)
+def calculate_ahi_from_binary_predictions(binary_predictions, epoch_duration_seconds=30):
+    """Tính AHI từ chuỗi nhị phân 0,1"""
+    total_epochs = len(binary_predictions)
+    apnea_events = np.sum(binary_predictions == 1)
+    total_time_hours = (total_epochs * epoch_duration_seconds) / 3600
     
-    block_files = [f for f in os.listdir(full_dataset.data_dir) if f.endswith('.npz')]
+    ahi = apnea_events / total_time_hours if total_time_hours > 0 else 0
+    return ahi
+
+
+def classify_osa_severity(ahi):
+    """Phân loại mức độ OSA"""
+    if ahi < 5:
+        return "Normal"
+    elif ahi < 15:
+        return "Mild"
+    elif ahi < 30:
+        return "Moderate"
+    else:
+        return "Severe"
+
+
+def create_model_predictions_csv(model, full_dataset, device):
+    """
+    BƯỚC 1: Tạo FILE 1 - Model predictions (chuỗi nhị phân → AHI)
+    """
+    print("📊 BƯỚC 1: Tạo FILE 1 - Model Predictions (Binary → AHI)...")
     
-    for block_file in block_files:
-        patient_id = block_file.replace('.npz', '')
-        
+    results_dir = os.path.join(project_dir, 'results')
+    os.makedirs(results_dir, exist_ok=True)
+    
+    model_results = []
+    
+    # Lấy danh sách patient directories
+    data_dir = full_dataset.data_dir
+    if os.path.isdir(data_dir):
+        patient_dirs = [os.path.join(data_dir, d) for d in os.listdir(data_dir) 
+                       if os.path.isdir(os.path.join(data_dir, d))]
+    else:
+        # Fallback nếu data_dir là file
+        patient_dirs = [data_dir]
+    
+    for p_dir in patient_dirs[:25]:  # Limit cho Kaggle
         try:
-            single_dataset = LazyApneaDataset(full_dataset.data_dir, sequence_length=30)
+            patient_id = os.path.basename(p_dir)
+            single_dataset = LazyApneaDataset(p_dir)
+            
+            if len(single_dataset) == 0:
+                continue
+                
             single_loader = DataLoader(single_dataset, batch_size=32, shuffle=False, num_workers=0)
             
-            predictions = []
+            # Get BINARY PREDICTIONS (0,1) từ model
+            model.eval()
+            binary_predictions = []
+            
             with torch.no_grad():
-                for batch in single_loader:
-                    inputs, _ = batch
+                for inputs, _ in single_loader:
                     inputs = inputs.to(device)
                     outputs = model(inputs)
-                    probs = torch.sigmoid(outputs).cpu().numpy()
-                    predictions.extend(probs.flatten())
+                    # BINARY predictions: 0 hoặc 1
+                    preds = (torch.sigmoid(outputs.squeeze()) > 0.5).float().cpu().numpy()
+                    binary_predictions.extend(preds)
             
-            # Lưu CSV
-            df = pd.DataFrame({
-                'segment_id': range(len(predictions)),
-                'prediction': predictions,
-                'prediction_binary': (np.array(predictions) > 0.5).astype(int)
-            })
-            
-            csv_path = os.path.join(predictions_dir, f"{patient_id}_preds.csv")
-            df.to_csv(csv_path, index=False)
-            
+            if len(binary_predictions) > 0:
+                # Convert binary sequence → AHI
+                binary_array = np.array(binary_predictions)
+                predicted_ahi = calculate_ahi_from_binary_predictions(binary_array)
+                predicted_severity = classify_osa_severity(predicted_ahi)
+                
+                model_results.append({
+                    'patient_id': patient_id,
+                    'predicted_ahi': predicted_ahi,
+                    'predicted_severity': predicted_severity,
+                    'total_epochs': len(binary_predictions),
+                    'apnea_events_predicted': np.sum(binary_array == 1),
+                    'normal_events_predicted': np.sum(binary_array == 0),
+                    'apnea_ratio': np.mean(binary_array == 1)
+                })
+                
         except Exception as e:
-            print(f"⚠️ Lỗi xử lý {patient_id}: {e}")
+            print(f"⚠️ Error processing {patient_id}: {e}")
     
-    print(f"💾 Đã lưu predictions vào {predictions_dir}")
+    # Save FILE 1
+    model_df = pd.DataFrame(model_results)
+    model_csv = os.path.join(results_dir, 'model_predictions_independent.csv')
+    model_df.to_csv(model_csv, index=False)
+    
+    print(f"✅ FILE 1 saved: {model_csv}")
+    print(f"  Format: Binary predictions → AHI cho {len(model_results)} patients")
+    return model_df, model_csv
+
+
+def create_ahi_psg_csv(full_dataset):
+    """
+    BƯỚC 2: Tạo FILE 2 - AHI PSG (true labels → true AHI)
+    """
+    print("📊 BƯỚC 2: Tạo FILE 2 - AHI PSG (True Labels → True AHI)...")
+    
+    results_dir = os.path.join(project_dir, 'results')
+    psg_results = []
+    
+    # Lấy danh sách patient directories
+    data_dir = full_dataset.data_dir
+    if os.path.isdir(data_dir):
+        patient_dirs = [os.path.join(data_dir, d) for d in os.listdir(data_dir) 
+                       if os.path.isdir(os.path.join(data_dir, d))]
+    else:
+        patient_dirs = [data_dir]
+    
+    for p_dir in patient_dirs[:25]:  # Limit cho Kaggle
+        try:
+            patient_id = os.path.basename(p_dir)
+            single_dataset = LazyApneaDataset(p_dir)
+            
+            if len(single_dataset) == 0:
+                continue
+            
+            # Get TRUE LABELS (ground truth)
+            true_labels = []
+            for i in range(len(single_dataset)):
+                try:
+                    _, label = single_dataset[i]
+                    true_labels.append(label.item())
+                except:
+                    continue
+            
+            if len(true_labels) > 0:
+                # Convert true labels → true AHI
+                true_array = np.array(true_labels)
+                true_ahi = calculate_ahi_from_binary_predictions(true_array)
+                true_severity = classify_osa_severity(true_ahi)
+                
+                psg_results.append({
+                    'patient_id': patient_id,
+                    'ahi_psg': true_ahi,
+                    'severity_psg': true_severity,
+                    'total_epochs': len(true_labels),
+                    'apnea_events_true': np.sum(true_array == 1),
+                    'normal_events_true': np.sum(true_array == 0),
+                    'total_sleep_hours': len(true_labels) * 30 / 3600
+                })
+                
+        except Exception as e:
+            print(f"⚠️ Error processing {patient_id}: {e}")
+    
+    # Save FILE 2
+    psg_df = pd.DataFrame(psg_results)
+    psg_csv = os.path.join(results_dir, 'ahi_psg_independent.csv')
+    psg_df.to_csv(psg_csv, index=False)
+    
+    print(f"✅ FILE 2 saved: {psg_csv}")
+    print(f"  Format: True labels → True AHI cho {len(psg_results)} patients")
+    return psg_df, psg_csv
+
+
+def compare_files_and_calculate_metrics(model_csv, psg_csv):
+    """
+    BƯỚC 3: Đọc 2 file CSV và tính MAE, RMSE, PCC
+    """
+    print("🔍 BƯỚC 3: So sánh 2 files và tính MAE, RMSE, PCC...")
+    
+    # Đọc 2 files
+    model_df = pd.read_csv(model_csv)
+    psg_df = pd.read_csv(psg_csv)
+    
+    # Merge theo patient_id
+    merged_df = pd.merge(model_df, psg_df, on='patient_id', how='inner')
+    
+    if len(merged_df) == 0:
+        print("❌ Không có patient nào match")
+        return None
+    
+    print(f"✅ Matched {len(merged_df)} patients")
+    
+    # Extract AHI values
+    predicted_ahi = merged_df['predicted_ahi'].values
+    true_ahi = merged_df['ahi_psg'].values
+    
+    # Tính MAE, RMSE, PCC
+    from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+    from scipy.stats import pearsonr
+    
+    mae = mean_absolute_error(true_ahi, predicted_ahi)
+    rmse = np.sqrt(mean_squared_error(true_ahi, predicted_ahi))
+    
+    try:
+        pcc, p_value = pearsonr(predicted_ahi, true_ahi)
+        if np.isnan(pcc):
+            pcc = 0.0
+    except:
+        pcc, p_value = 0.0, 1.0
+    
+    # R² score
+    r2 = r2_score(true_ahi, predicted_ahi)
+    
+    # Severity accuracy
+    severity_acc = (merged_df['predicted_severity'] == merged_df['severity_psg']).mean()
+    
+    # Save comparison results
+    results_dir = os.path.join(project_dir, 'results')
+    comparison_csv = os.path.join(results_dir, 'comparison_results_independent.csv')
+    
+    merged_df['ahi_error'] = predicted_ahi - true_ahi
+    merged_df['ahi_error_abs'] = np.abs(predicted_ahi - true_ahi)
+    merged_df['overall_mae'] = mae
+    merged_df['overall_rmse'] = rmse
+    merged_df['overall_pcc'] = pcc
+    merged_df['overall_r2'] = r2
+    merged_df['overall_severity_acc'] = severity_acc
+    
+    merged_df.to_csv(comparison_csv, index=False)
+    
+    # Print results
+    print(f"\n🎯 KẾT QUẢ CUỐI CÙNG (Binary Predictions → AHI → Metrics):")
+    print(f"  📈 MAE: {mae:.2f}")
+    print(f"  📈 RMSE: {rmse:.2f}")
+    print(f"  📈 PCC: {pcc:.4f} (p-value: {p_value:.4f})")
+    print(f"  📈 R²: {r2:.4f}")
+    print(f"  📈 Severity Accuracy: {severity_acc:.2f}")
+    
+    print(f"\n� 3 FILES ĐÃ TẠO:")
+    print(f"  📄 Model predictions: {model_csv}")
+    print(f"  📄 AHI PSG: {psg_csv}")
+    print(f"  📄 Comparison results: {comparison_csv}")
+    
+    return merged_df, {'mae': mae, 'rmse': rmse, 'pcc': pcc, 'r2': r2, 'severity_acc': severity_acc}
 
 
 def main_simple():
     """Hàm main đơn giản giống LSTM"""
+    print("🚀 ConvNeXt+Transformer Training với Binary Predictions")
+    print("📋 Workflow: Train → Binary (0,1) → 2 CSV files → MAE/RMSE/PCC")
+    
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     print(f"🔧 Device: {device}")
     
@@ -220,32 +412,49 @@ def main_simple():
     if train_loader is None:
         return
     
-    # Tạo mô hình
+    # Tạo mô hình - QUAN TRỌNG: num_classes=1 cho binary output
     model = ConvNeXtTransformerLite(
+        num_classes=1,     # 1 output cho binary classification
         embed_dim=160,
         num_heads=5, 
-        num_layers=4,
+        num_transformer_layers=4,
         dropout=0.08
     ).to(device)
     
-    print(f"🏗️ Model parameters: {count_parameters(model):,}")
+    total_params = count_parameters(model)
+    print(f"🏗️ Model: {total_params:,} parameters ({total_params/1e6:.2f}M)")
+    print(f"  Architecture: ConvNeXt + Transformer → Binary output (0,1)")
     
-    # Huấn luyện
-    print("\n🚀 Bắt đầu huấn luyện...")
-    train_simple(model, train_loader, val_loader, device, epochs=50)
+    # STEP 1: Huấn luyện
+    print("\n🚀 STEP 1: Training model...")
+    train_simple(model, train_loader, val_loader, device, epochs=30)
     
-    # Đánh giá cuối cùng
-    print("\n📊 Đánh giá cuối cùng:")
+    # Load best model
     checkpoint_path = os.path.join(project_dir, 'checkpoints', 'ConvNeXtTransformerLite_best.pth')
     if os.path.exists(checkpoint_path):
-        model.load_state_dict(torch.load(checkpoint_path))
-        print("✅ Đã tải model tốt nhất")
+        model.load_state_dict(torch.load(checkpoint_path, map_location=device))
+        print("✅ Loaded best model")
     
+    # Đánh giá cuối cùng
+    print("\n📊 Final test evaluation:")
     evaluate(model, test_loader, device, "Test")
     
-    # Tạo predictions
-    print("\n💾 Tạo predictions...")
-    predict_and_save_csv_per_block(model, full_dataset, device)
+    # STEP 2: Tạo 2 file CSV từ binary predictions
+    print("\n� STEP 2: Tạo 2 CSV files từ binary predictions...")
+    
+    # File 1: Model binary predictions → AHI
+    model_df, model_csv = create_model_predictions_csv(model, full_dataset, device)
+    
+    # File 2: True labels → True AHI
+    psg_df, psg_csv = create_ahi_psg_csv(full_dataset)
+    
+    # STEP 3: So sánh 2 files và tính MAE, RMSE, PCC
+    comparison_df, final_metrics = compare_files_and_calculate_metrics(model_csv, psg_csv)
+    
+    print("\n✅ HOÀN THÀNH! Binary predictions workflow!")
+    print("🎯 Train → Binary (0,1) → CSV files → MAE/RMSE/PCC calculation")
+    if final_metrics:
+        print(f"🏆 Final PCC: {final_metrics['pcc']:.4f}")
 
 
 def optimize_memory():
