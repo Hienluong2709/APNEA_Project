@@ -1,6 +1,9 @@
 import torch
 import torch.nn as nn
-from .convnext_lite import ConvNeXtBackboneLite, GlobalAvgPooling, count_parameters
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+from models.convnext_lite import ConvNeXtBackboneLite, GlobalAvgPooling, count_parameters
 
 class TransformerEncoderLayerLite(nn.Module):
     """
@@ -61,8 +64,8 @@ class ConvNeXtTransformerLite(nn.Module):
     """
     Phiên bản cải tiến của ConvNeXT-Transformer với hiệu suất cao hơn
     """
-    def __init__(self, num_classes=2, embed_dim=128, num_heads=8, 
-                 num_transformer_layers=4, dropout=0.3, dropout_path=0.1):
+    def __init__(self, num_classes=2, embed_dim=80, num_heads=4, 
+                 num_transformer_layers=3, dropout=0.3, dropout_path=0.1):
         super().__init__()
         
         # Sử dụng ConvNeXtBackboneLite với stochastic depth (dropout path)
@@ -77,7 +80,7 @@ class ConvNeXtTransformerLite(nn.Module):
         # Focal Attention để tập trung vào các feature quan trọng
         self.focal_attention = FocalAttention(256)
         
-        # Đặt embedding dimension lớn hơn để nắm bắt thông tin tốt hơn
+        # Đặt embedding dimension nhỏ hơn để giảm số tham số
         self.projection = nn.Sequential(
             nn.Linear(256, embed_dim),
             nn.LayerNorm(embed_dim),  # Thêm LayerNorm trước GELU
@@ -91,9 +94,9 @@ class ConvNeXtTransformerLite(nn.Module):
         # Position Embedding
         self.pos_embedding = nn.Parameter(torch.zeros(1, 1, embed_dim))
         
-        # Tăng số lượng layers của transformer
+        # Điều chỉnh feedforward dimension để đạt ~1.82M tham số
         self.transformer_layers = nn.ModuleList([
-            TransformerEncoderLayerLite(embed_dim, num_heads, embed_dim*4, dropout)
+            TransformerEncoderLayerLite(embed_dim, num_heads, embed_dim*2 + 35, dropout)
             for _ in range(num_transformer_layers)
         ])
         
