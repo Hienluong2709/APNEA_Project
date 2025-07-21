@@ -34,8 +34,8 @@ def generate_ahi_labels(apnea_edf_dir, default_duration_sec=6*3600):
         })
 
     df = pd.DataFrame(records)
-    df.to_csv("ahi_labels.csv", index=False)
-    print("\n📁 Đã lưu file: ahi_labels2.csv")
+    df.to_csv("ahi_labels3.csv", index=False)
+    print("\n📁 Đã lưu file: ahi_labels3.csv")
 
 def extract_features_from_predictions(pred_dir, ahi_labels_path):
     ahi_df = pd.read_csv(ahi_labels_path)
@@ -90,9 +90,9 @@ def extract_features_from_predictions(pred_dir, ahi_labels_path):
     merged_df["is_val"] = 0
     merged_df.loc[:num_val - 1, "is_val"] = 1
 
-    merged_df.to_csv("ahi_labels.csv", index=False)
-    print("✅ Đã cập nhật và lưu file: ahi_labels2.csv")
+    merged_df.to_csv("ahi_labels3.csv", index=False)
+    print("✅ Đã cập nhật và lưu file: ahi_labels3.csv")
 
 if __name__ == "__main__":
     generate_ahi_labels("data/PSG-AUDIO/APNEA_EDF", default_duration_sec=6*3600)  # 6 tiếng mặc định
-    extract_features_from_predictions("predictions_trans", "ahi_labels2.csv")
+    extract_features_from_predictions("predictions_trans2", "ahi_labels3.csv")

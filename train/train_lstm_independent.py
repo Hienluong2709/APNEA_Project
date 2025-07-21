@@ -8,13 +8,13 @@ from sklearn.metrics import f1_score, accuracy_score
 from sklearn.model_selection import train_test_split
 from tqdm import tqdm
 import pandas as pd
-
+PendingDeprecationWarning
 # Gắn thư mục gốc vào sys.path để import module bên ngoài
 project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(project_root)
 
 from dataset.lazy_apnea_dataset import LazyApneaSequenceDataset
-from models.convnext_lstm_lite import ConvNeXtLSTMLiteSequence
+from models.convnext_lstm_lite import ConvNeXtZ_LSTMLiteSequence
 
 
 def evaluate(model, dataloader, device, name=""):
@@ -35,15 +35,22 @@ def evaluate(model, dataloader, device, name=""):
     return acc, f1
 
 
-def train(model, train_loader, val_loader, test_loader, device, epochs=5, lr=3e-4, resume_path=None):
+def train(model, train_loader, val_loader, test_loader, device, epochs=5, lr=1e-4):
     model = model.to(device)
-    optimizer = optim.AdamW(model.parameters(), lr=lr)
+    # Thêm weight decay để regularization
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=1e-4)
+    
+    # Scheduler để giảm learning rate
+    scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        optimizer, mode='max', factor=0.5, patience=2
+    )
+    
     criterion = nn.CrossEntropyLoss()
     best_f1 = 0
+    patience_counter = 0
+    max_patience = 5  # Early stopping
 
-    if resume_path and os.path.exists(resume_path):
-        print(f"🔄 Resume from checkpoint: {resume_path}")
-        model.load_state_dict(torch.load(resume_path))
+    print(f"🆕 Bắt đầu huấn luyện mô hình từ đầu. Tổng số tham số: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M")
 
     for epoch in range(epochs):
         model.train()
@@ -67,9 +74,28 @@ def train(model, train_loader, val_loader, test_loader, device, epochs=5, lr=3e-
         train_acc = accuracy_score(all_labels, all_preds)
         val_acc, val_f1 = evaluate(model, val_loader, device, name="Validation")
 
+        # Early stopping logic
         if val_f1 > best_f1:
             best_f1 = val_f1
+            patience_counter = 0
             torch.save(model.state_dict(), "checkpoints/convnext_lstm_seq_best.pth")
+            print(f"✅ Saved best model with Val F1: {val_f1:.4f}")
+        else:
+            patience_counter += 1
+            print(f"⚠️ No improvement. Patience: {patience_counter}/{max_patience}")
+            
+        # Step scheduler
+        current_lr = optimizer.param_groups[0]['lr']
+        scheduler.step(val_f1)
+        new_lr = optimizer.param_groups[0]['lr']
+        
+        if new_lr != current_lr:
+            print(f"📉 Learning rate reduced from {current_lr:.2e} to {new_lr:.2e}")
+        
+        # Early stopping
+        if patience_counter >= max_patience:
+            print(f"🛑 Early stopping at epoch {epoch + 1}")
+            break
 
         if (epoch + 1) % 2 == 0:
             torch.save(model.state_dict(), f"checkpoints/epoch_{epoch+1}.pth")
@@ -87,14 +113,15 @@ def load_data_independent(data_root, seq_len=5, batch_size=8):
     train_pats, temp_pats = train_test_split(patients, test_size=0.2, random_state=42)
     val_pats, test_pats = train_test_split(temp_pats, test_size=0.5, random_state=42)
 
-    def load_blocks(pat_list, name):
+    def load_blocks(pat_list, name, use_augment=False):
         datasets = []
         print(f"\n📦 Loading {name} data...")
         for p in pat_list:
             p_dir = os.path.join(data_root, p)
             try:
-                ds = LazyApneaSequenceDataset(p_dir, seq_len=seq_len)
-                print(f"✅ {name} - {p} ({len(ds)} sequences)")
+                # Chỉ sử dụng augmentation cho training data
+                ds = LazyApneaSequenceDataset(p_dir, seq_len=seq_len, augment=use_augment)
+                print(f"✅ {name} - {p} ({len(ds)} sequences) - Augment: {use_augment}")
                 datasets.append(ds)
             except Exception as e:
                 print(f"⚠️ Lỗi với {p}: {e}")
@@ -102,9 +129,10 @@ def load_data_independent(data_root, seq_len=5, batch_size=8):
             raise RuntimeError(f"❌ Không có dữ liệu trong tập {name}")
         return ConcatDataset(datasets)
 
-    train_ds = load_blocks(train_pats, "Train")
-    val_ds = load_blocks(val_pats, "Validation")
-    test_ds = load_blocks(test_pats, "Test")
+    # Chỉ train data mới dùng augmentation
+    train_ds = load_blocks(train_pats, "Train", use_augment=True)
+    val_ds = load_blocks(val_pats, "Validation", use_augment=False)
+    test_ds = load_blocks(test_pats, "Test", use_augment=False)
 
     with open("patient_split_log.txt", "w") as f:
         f.write("Train patients:\n" + "\n".join(train_pats) + "\n\n")
@@ -167,10 +195,10 @@ if __name__ == "__main__":
     print("🚀 Bắt đầu huấn luyện ConvNeXt-LSTM sequence...")
 
     train_loader, val_loader, test_loader = load_data_independent(data_path, seq_len=5, batch_size=8)
-    model = ConvNeXtLSTMLiteSequence(num_classes=2)
+    model = ConvNeXtZ_LSTMLiteSequence(num_classes=2)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
-    resume_ckpt = "checkpoints/convnext_lstm_seq_best.pth"
-    train(model, train_loader, val_loader, test_loader, device, epochs=5, resume_path=resume_ckpt)
+    # ✅ Không load checkpoint (huấn luyện lại từ đầu)
+    train(model, train_loader, val_loader, test_loader, device, epochs=10, lr=1e-4)
 
     predict_and_save_csv_per_block(model, data_path, device)

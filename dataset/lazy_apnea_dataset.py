@@ -8,21 +8,25 @@ from scipy import signal
 
 class AudioAugmentation:
     """
-    Lớp augmentation cho dữ liệu âm thanh (mel-spectrogram)
+    Lớp augmentation cho dữ liệu âm thanh (mel-spectrogram) - Phiên bản mạnh hơn
     """
     def __init__(self, 
-                 time_mask_prob=0.5, 
-                 freq_mask_prob=0.5, 
-                 time_mask_width=20, 
-                 freq_mask_width=10,
-                 noise_prob=0.3,
-                 noise_level=0.05):
+                 time_mask_prob=0.7,  # Tăng xác suất
+                 freq_mask_prob=0.7, 
+                 time_mask_width=30,  # Tăng độ rộng mask
+                 freq_mask_width=15,
+                 noise_prob=0.5,      # Tăng xác suất noise
+                 noise_level=0.08,    # Tăng mức noise
+                 cutout_prob=0.3,     # Thêm cutout
+                 cutout_size=20):
         self.time_mask_prob = time_mask_prob
         self.freq_mask_prob = freq_mask_prob
         self.time_mask_width = time_mask_width
         self.freq_mask_width = freq_mask_width
         self.noise_prob = noise_prob
         self.noise_level = noise_level
+        self.cutout_prob = cutout_prob
+        self.cutout_size = cutout_size
     
     def add_time_mask(self, spec):
         """Thêm time mask vào mel-spectrogram"""
@@ -47,6 +51,27 @@ class AudioAugmentation:
         noise = np.random.normal(0, self.noise_level, spec.shape)
         return spec + noise
     
+    def add_cutout(self, spec):
+        """Thêm cutout (random rectangular patches set to 0)"""
+        spec_copy = spec.copy()
+        h, w = spec.shape
+        
+        # Random cutout position
+        cut_h = np.random.randint(0, h - self.cutout_size)
+        cut_w = np.random.randint(0, w - self.cutout_size)
+        
+        spec_copy[cut_h:cut_h + self.cutout_size, cut_w:cut_w + self.cutout_size] = 0
+        return spec_copy
+    
+    def add_mixup_noise(self, spec):
+        """Thêm nhiễu có cấu trúc (structured noise)"""
+        # Thêm sine wave noise
+        freq_noise = 0.1 * np.sin(np.linspace(0, 4*np.pi, spec.shape[1]))
+        spec_copy = spec.copy()
+        for i in range(spec.shape[0]):
+            spec_copy[i] += freq_noise * np.random.uniform(0, 0.05)
+        return spec_copy
+    
     def __call__(self, spec):
         """Áp dụng augmentation với xác suất cho trước"""
         if random.random() < self.time_mask_prob:
@@ -57,6 +82,12 @@ class AudioAugmentation:
             
         if random.random() < self.noise_prob:
             spec = self.add_gaussian_noise(spec)
+            
+        if random.random() < self.cutout_prob:
+            spec = self.add_cutout(spec)
+            
+        if random.random() < 0.2:  # 20% chance cho structured noise
+            spec = self.add_mixup_noise(spec)
             
         return spec
 

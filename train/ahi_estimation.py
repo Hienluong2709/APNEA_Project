@@ -22,7 +22,7 @@ def extract_features_from_preds(preds):
     return [n_1, num_1_blocks, avg_len_1, avg_len_0, n_total]
 
 
-def load_ahi_labels(path="ahi_labels2.csv"):
+def load_ahi_labels(path="ahi_labels3.csv"):
     df = pd.read_csv(path)
     return dict(zip(df["patient_id"], df["ahi_psg"]))
 
@@ -60,7 +60,7 @@ def classify_osa(ahi):
         return "Nặng"
 
 
-def train_and_evaluate_ahi_regression(pred_dir, ahi_csv="ahi_labels2.csv"):
+def train_and_evaluate_ahi_regression(pred_dir, ahi_csv="ahi_labels3.csv"):
     ahi_dict = load_ahi_labels(ahi_csv)
     X, y, patient_ids = prepare_dataset(pred_dir, ahi_dict)
 
@@ -85,14 +85,14 @@ def train_and_evaluate_ahi_regression(pred_dir, ahi_csv="ahi_labels2.csv"):
     df_result["error"] = df_result["ahi_pred"] - df_result["ahi_psg"]
     df_result["osa_pred_level"] = df_result["ahi_pred"].apply(classify_osa)
 
-    df_result.to_csv("ahi_estimation_results_trans.csv", index=False)
-    print("\n✅ Đã lưu kết quả vào ahi_estimation_results_trans.csv")
+    df_result.to_csv("ahi_estimation_results_trans2.csv", index=False)
+    print("\n✅ Đã lưu kết quả vào ahi_estimation_results_trans2.csv")
 
     return model
 
 
 if __name__ == "__main__":
-    pred_dir = "predictions_trans"               
-    ahi_csv_path = "ahi_labels2.csv"        
+    pred_dir = "predictions_trans2"               
+    ahi_csv_path = "ahi_labels3.csv"        
 
     train_and_evaluate_ahi_regression(pred_dir, ahi_csv_path)
