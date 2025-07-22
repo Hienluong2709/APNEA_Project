@@ -22,7 +22,7 @@ class ConvNeXtZ_LSTMLiteSequence(nn.Module):
         self.projection_dropout = nn.Dropout(dropout * 0.3)
 
         # GRU 2 tầng, kích thước lớn với dropout
-        self.lstm = nn.GRU(
+        self.lstm = nn.LSTM(
             input_size=embed_dim,
             hidden_size=lstm_hidden,
             num_layers=lstm_layers,
