@@ -85,12 +85,7 @@ def train(model, train_loader, val_loader, test_loader, device, epochs=5, lr=1e-
             print(f"⚠️ No improvement. Patience: {patience_counter}/{max_patience}")
             
         # Step scheduler
-        current_lr = optimizer.param_groups[0]['lr']
         scheduler.step(val_f1)
-        new_lr = optimizer.param_groups[0]['lr']
-        
-        if new_lr != current_lr:
-            print(f"📉 Learning rate reduced from {current_lr:.2e} to {new_lr:.2e}")
         
         # Early stopping
         if patience_counter >= max_patience:
@@ -199,6 +194,7 @@ if __name__ == "__main__":
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # ✅ Không load checkpoint (huấn luyện lại từ đầu)
-    train(model, train_loader, val_loader, test_loader, device, epochs=10, lr=1e-4)
+    train(model, train_loader, val_loader, test_loader, device, epochs=5, lr=1e-4)
 
     predict_and_save_csv_per_block(model, data_path, device)
+12 
