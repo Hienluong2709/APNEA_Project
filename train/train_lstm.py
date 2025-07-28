@@ -13,7 +13,8 @@ project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 sys.path.append(project_root)
 
 from dataset.lazy_apnea_dataset import LazyApneaSequenceDataset
-from models.convnext_lstm_lite import ConvNeXtLSTMLiteSequence
+from models.convnext_lstm_lite import ConvNeXtZ_LSTMLiteSequence
+
 
 
 def evaluate(model, dataloader, device, name=""):
@@ -36,7 +37,7 @@ def evaluate(model, dataloader, device, name=""):
     return acc, f1
 
 
-def train(model, train_loader, val_loader, test_loader, device, epochs=5, lr=3e-4, resume_path=None):
+def train(model, train_loader, val_loader, test_loader, device, epochs=3, lr=3e-4, resume_path=None):
     model = model.to(device)
     optimizer = optim.AdamW(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
@@ -168,7 +169,7 @@ def predict_and_save_csv_per_block(model, data_root, device, seq_len=5):
 
 
 if __name__ == "__main__":
-    data_path = os.path.abspath("data/blocks")
+    data_path = os.path.abspath("/content/drive/MyDrive/data/blocks")
 
     if not os.path.exists(data_path):
         raise RuntimeError(f"❌ Không tìm thấy thư mục: {data_path}")
@@ -177,11 +178,14 @@ if __name__ == "__main__":
     print("🚀 Bắt đầu huấn luyện ConvNeXt-LSTM sequence...")
 
     train_loader, val_loader, test_loader = load_data(data_path, seq_len=5, batch_size=8)
-    model = ConvNeXtLSTMLiteSequence(num_classes=2)
-    device = 'cuda' if torch.cuda.is_available() else 'cpu'
+    model = ConvNeXtZ_LSTMLiteSequence(num_classes=2)
+    device = 'cuda' if torch.cuda.is_available() else 'cpu' 
 
     # Nếu muốn resume từ checkpoint, truyền đường dẫn ở đây:
-    resume_ckpt = "checkpoints/convnext_lstm_seq_best.pth"
-    train(model, train_loader, val_loader, test_loader, device, epochs=5, resume_path=resume_ckpt)
+    # resume_ckpt = "checkpoints/convnext_lstm_seq_best.pth"
+    # train(model, train_loader, val_loader, test_loader, device, epochs=5, resume_path=resume_ckpt)
+    
+    train(model, train_loader, val_loader, test_loader, device, epochs=3)
 
+    model.load_state_dict(torch.load("checkpoints/convnext_lstm_dependent_seq_best.pth"))
     predict_and_save_csv_per_block(model, data_path, device)
